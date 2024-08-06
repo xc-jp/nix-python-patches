@@ -1,0 +1,136 @@
+From: JoanCoCo <joan.colomcolom@cross-compass.com>
+From 5316a32b0ad5f09ca93fdc8266f5e18eaf74c904 Mon Sep 17 00:00:00 2001
+Date: Tue, 6 Aug 2024 12:51:00 +0900
+Subject: [PATCH] Path to always return NO_FILE on check consent file.
+
+Trying to check and modify the consent file on import is side-effecty,
+which does not play nicely with-in nix builds. This is a problem when
+pytests are added as part of a build that imports OpenVINO. To solve
+this, lets always return NO_FILE, as there is no consent file inside a
+nix build.
+---
+ openvino_telemetry/utils/cid.py            | 13 ++++++--
+ openvino_telemetry/utils/opt_in_checker.py | 63 ++-----------------------------------
+ 2 files changed, 12 insertions(+), 64 deletions(-)
+
+diff --git a/openvino_telemetry/utils/cid.py b/openvino_telemetry/utils/cid.py
+index fa4868a..2ef6659 100644
+--- a/openvino_telemetry/utils/cid.py
++++ b/openvino_telemetry/utils/cid.py
+@@ -4,7 +4,7 @@
+ import logging as log
+ import os
+ 
+-from .opt_in_checker import OptInChecker
++from .opt_in_checker import OptInChecker, ConsentCheckResult
+ 
+ 
+ def save_cid_to_file(file_name: str, cid: str):
+@@ -29,6 +29,9 @@ def get_cid(file_name: str, validator: [callable, None]):
+     :param validator: the function to validate the client ID
+     :return: existing client ID file
+     """
++    match OptInChecker().check(False):
++        case ConsentCheckResult.NO_FILE:
++            return None
+     full_path = os.path.join(get_cid_path(), file_name)
+     cid = None
+     if os.path.exists(full_path):
+@@ -53,10 +56,14 @@ def get_or_generate_cid(file_name: str, generator: callable, validator: [callabl
+         return cid
+     if old_name is not None:
+         cid = get_cid(old_name, validator)
+-    full_path = os.path.join(get_cid_path(), file_name)
+     if cid is None:
+         cid = generator()
+-    save_cid_to_file(full_path, cid)
++    match OptInChecker().check(False):
++        case ConsentCheckResult.NO_FILE:
++            pass
++        case _:
++            full_path = os.path.join(get_cid_path(), file_name)
++            save_cid_to_file(full_path, cid)
+     return cid
+ 
+ 
+diff --git a/openvino_telemetry/utils/opt_in_checker.py b/openvino_telemetry/utils/opt_in_checker.py
+index 6cd44f9..8acea85 100644
+--- a/openvino_telemetry/utils/opt_in_checker.py
++++ b/openvino_telemetry/utils/opt_in_checker.py
+@@ -143,47 +143,7 @@ class OptInChecker:
+         Creates consent file directory and checks if the directory is writable.
+         :return: True if the directory is created and writable, otherwise False
+         """
+-        base_dir = self.consent_file_base_dir()
+-        base_is_dir = os.path.isdir(base_dir)
+-        base_dir_exists = os.path.exists(base_dir)
+-        base_w_access = os.access(base_dir, os.W_OK)
+-
+-        if not base_dir_exists or not base_is_dir:
+-            return False
+-        if not base_w_access:
+-            log.warning("Failed to create openvino_telemetry file. "
+-                        "Please allow write access to the following directory: {}".format(base_dir))
+-            return False
+-
+-        consect_file_dir = os.path.join(self.consent_file_base_dir(), self.consent_file_subdirectory())
+-        consent_file_is_dir = os.path.isdir(consect_file_dir)
+-        consent_file_dir_exists = os.path.exists(consect_file_dir)
+-
+-        # If consent path exists and it is not directory, we try to remove it
+-        if consent_file_dir_exists and not consent_file_is_dir:
+-            try:
+-                os.remove(consect_file_dir)
+-            except:
+-                log.warning("Unable to create directory for openvino_telemetry file, as {} is invalid directory.".format(consect_file_dir))
+-                return False
+-
+-        if not os.path.exists(consect_file_dir):
+-            try:
+-                os.mkdir(consect_file_dir)
+-
+-                # check that directory is created
+-                if not os.path.exists(consect_file_dir):
+-                    return False
+-            except Exception as e:
+-                log.warning("Failed to create directory for openvino_telemetry file: {}".format(str(e)))
+-                return False
+-
+-        consent_file_w_access = os.access(consect_file_dir, os.W_OK)
+-        if not consent_file_w_access:
+-            log.warning("Failed to create openvino_telemetry file. "
+-                        "Please allow write access to the following directory: {}".format(consect_file_dir))
+-            return False
+-        return True
++        return False
+ 
+     def update_result(self, result: ConsentCheckResult):
+         """
+@@ -297,23 +257,4 @@ class OptInChecker:
+         Checks if user has accepted the collection of the information by checking the consent file.
+         :return: consent check result
+         """
+-        if disable_in_ci and self._run_in_ci():
+-            return ConsentCheckResult.DECLINED
+-
+-        if not os.path.exists(self.consent_file()):
+-            if enable_opt_in_dialog:
+-                if not self._check_main_process():
+-                    return ConsentCheckResult.DECLINED
+-
+-                if not self._check_input_is_terminal() or self._check_run_in_notebook():
+-                    return ConsentCheckResult.DECLINED
+-            return ConsentCheckResult.NO_FILE
+-
+-        if not self.consent_file_is_empty():
+-            _, content = self.get_info_from_consent_file()
+-            if content == "1":
+-                return ConsentCheckResult.ACCEPTED
+-            elif content == "0":
+-                return ConsentCheckResult.DECLINED
+-        log.warning("Incorrect format of the file with opt-in status.")
+-        return ConsentCheckResult.DECLINED
++        return ConsentCheckResult.NO_FILE
+-- 
+2.44.0
+
